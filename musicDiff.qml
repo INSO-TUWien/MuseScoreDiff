@@ -21,6 +21,14 @@ MuseScore
 
     property var score1;
     property var score2;
+
+    property int pageNum: 1;
+
+    property bool diffMode: false;
+    property var differences;
+    property int differenceNum: 0;
+    property var leftPlayMeasure: {"start": 0, "end": 0};
+    property var rightPlayMeasure: {"start": 0, "end": 0};
     
     /* --- COLOR --- */
 
@@ -53,6 +61,8 @@ MuseScore
     }
 
     function toggleElement(el, show) {
+        if(!el)
+            return;
         if(!(show === true || show === false))
             show = false;
 
@@ -60,23 +70,20 @@ MuseScore
             var notes = el.notes;
             for(var i = 0; i < notes.length; i++)
                 toggleElement(notes[i], show);
-            if(el.stem)
-                el.stem.visible = show;
-            if(el.beam)
-                el.beam.visible = show;
-            if(el.stemSlash)
-                el.stemSlash.visible = show;
+            toggleElement(el.stem, show);
+            toggleElement(el.stemSlash, show);
+            toggleElement(el.beam, show);
+            toggleElement(el.hook, show);
         }
         else if(el.type === Element.NOTE) {
             el.visible = show;
-            if(el.accidental)
-                el.accidental.visible = show;
+            toggleElement(el.stem, show);
+            toggleElement(el.beam, show);
+            toggleElement(el.accidental, show);
             for(var i = 0; i < el.elements; i++)
                 toggleElement(el.elements[i], show);
             for(var i = 0; i < el.dots; i++)
                 toggleElement(el.dots[i], show);
-            if(el.accidental)
-                toggleElement(el.accidental.color, show);
         }
         else if(el.type === Element.REST)
             el.visible = show;
@@ -84,8 +91,14 @@ MuseScore
             el.visible = show;
     }
 
-    function colorMeasure(measure, _color) {
+    function colorMeasure(score, measureNum, _color) {
+        var measure = getMeasure(score, measureNum);
+        if(measureNum > 1) {
+            var prevMeasure = getMeasure(score, measureNum - 1);
+            colorElement(prevMeasure.lastSegment.elementAt(0), _color, true);
+        }
         var seg = measure.firstSegment;
+
 
         while(seg) {
             colorElement(seg.elementAt(0), _color, true);
@@ -107,27 +120,43 @@ MuseScore
         cur.rewind(0);
 
         while(cur.measure) {
-            colorMeasure(cur.measure, colors.black);
+            var seg = cur.measure.firstSegment;
+            while(seg) {
+                colorElement(seg.elementAt(0), colors.black, true);
+                seg = seg.nextInMeasure;
+            }
             toggleMeasure(cur.measure, true);
             cur.nextMeasure();
         }
     }
 
     function highlightMeasures(score, from, to) {
-        if(!from)
+        if(!from && !from === 0)
             to = -1;
         var cur = score.newCursor();
         cur.track = 0;
         cur.rewind(0);
 
+
         var measure = 0;
         while(cur.measure) {
-            if(!(from <= measure && measure <= to))
-                toggleMeasure(cur.measure, false);
-            else
+            if(from <= measure && measure <= to)
                 toggleMeasure(cur.measure, true);
+            else
+                toggleMeasure(cur.measure, false);
             cur.nextMeasure();
             measure++;
+        } 
+    }
+
+    function clearHighlighting(score) {
+        var cur = score.newCursor();
+        cur.track = 0;
+        cur.rewind(0);
+
+        while(cur.measure) {
+            toggleMeasure(cur.measure, true);
+            cur.nextMeasure();
         } 
     }
 
@@ -145,10 +174,16 @@ MuseScore
             timer.start();
         }
 
-        function playMeasures(from, to) {
+        function playMeasures(from, to, supressStop) {
+            if(supressStop !== true)
+                supressStop = false;
             if(to < from)
                 return;
             var prepareCommands = ["escape", "next-element", "next-measure", "prev-measure"];
+
+            // Disable play buttons until playback is finished
+            btnPlayLeft.enabled = false;
+            btnPlayRight.enabled = false;
 
             //calculate play time
             var measures = to - from + 1;
@@ -169,33 +204,17 @@ MuseScore
             
             cmd("play");
 
-            timer.setTimeout(function(){cmd("play");}, time);
+
+            timer.setTimeout(function(){
+                if(!supressStop)
+                    cmd("play");
+                btnPlayLeft.enabled = true;
+                btnPlayRight.enabled = true;
+            }, time);
         }
     }
-
-    /*function adjustMeasureLineBreak(score, measuresPerLine) {
-        var cur = score.newCursor();
-        cur.track = 0;
-        cur.rewind(0);
-
-        var i = 0;
-
-        while(cur.measure) {
-            if(i % measuresPerLine === 0 && i > 0)
-                cur.measure.lineBreak = true;
-            else
-                cur.measure.lineBreak = false;
-            console.log(cur.measure.lineBreak);
-            cur.nextMeasure();
-            i++;
-        }
-        
-    }*/
     
-    function compareMeasures(m1, m2, mapOptions) {
-        if(mapOptions && mapOptions.map && mapOptions.m1num && mapOptions.m2num)
-            if(mapOptions.map.has(mapOptions.m1num + "-" + mapOptions.m2num))
-                return mapOptions.map.get(mapOptions.m1num + "-" + mapOptions.m2num);
+    function compareMeasures(m1, m2) {
         if(m1 === null || m2 === null)
             return false;
         
@@ -251,7 +270,6 @@ MuseScore
                         break;
                     }
                 }
-                
             }
 
             seg1 = seg1.nextInMeasure;
@@ -261,275 +279,342 @@ MuseScore
         if(seg1 || seg2)
             equals = false;
 
-        if(mapOptions && mapOptions.map && mapOptions.m1num && mapOptions.m2num)
-            mapOptions.map.set(mapOptions.m1num + "-" + mapOptions.m2num, equals);
-
         return equals;
     }
 
-    function getMeasure(score, measure, map) {
-        if(map && map.has(measure))
-            return map.get(measure);
+    function getMeasureCursor(score, measure) {
+        measure--;
         if(measure < 0 || measure >= score.nmeasures)
             return null;
-        var c1 = score.newCursor();
-        c1.track = 0;
-        c1.rewind(0);  // set cursor to first chord/rest
+        var c = score.newCursor();
+        c.track = 0;
+        c.rewind(0);  // set cursor to first chord/rest
         for(var i = 0; i < measure; i++)
-            c1.nextMeasure();
-        if(map)
-            map.set(measure, c1.measure);
-        return c1.measure;
-    }
-    
-    function hashMapFactory() {
-        var hashmap = { };
-        hashmap["_data"] = {};
-        hashmap["get"] = function (key) { return this._data[key]; };
-        hashmap["set"] = function (key, data) { this._data[key] = data; };
-        hashmap["has"] = function (key) { return key in this._data; };
-        return hashmap;
+            c.nextMeasure();
+
+        return c;
+
     }
 
-    function meyersDiff(s1, s2) {
-        var m1Map = hashMapFactory(); // caches measures of s1
-        var m2Map = hashMapFactory(); // caches measures of s2
-        var mCompMap = hashMapFactory(); // caches comparisons of measures
+    function getMeasure(score, measure) {
+        measure--;
+        if(measure < 0 || measure >= score.nmeasures)
+            return null;
+        var c = score.newCursor();
+        c.track = 0;
+        c.rewind(0);  // set cursor to first chord/rest
+        for(var i = 0; i < measure; i++)
+            c.nextMeasure();
+        return c.measure;
+    }
 
+    function lcsLength(s1, s2) {
         var s1length = s1.nmeasures;
         var s2length = s2.nmeasures;
-        var maxLength = s1length + s2length;
-        var v = new Array(2 * maxLength + 2);
-        var x, y, k;
-        var trace = [];
 
-        v[1] = 0;
-        for(var d = 0; d <= maxLength; d++) {
-            //new kpath
-            console.log("new kpath: " + d + " => " + v);
-            trace[d] = v.slice();
-            for(k = -d; k <= d; k += 2) {
-                // console.log(k);
-                if(k === -d || k !== d && v[k - 1] < v[k + 1]) { // down
-                    // console.log("down");
-                    x = v[k + 1];
-                }
-                else { // right
-                    // console.log("right");
-                    x = v[k - 1] + 1;
-                }
-                y = x - k;
-                // follow snake -> diagonal
-                while(x < s1length && y < s2length && 
-                  compareMeasures(getMeasure(s1, x, m1Map), getMeasure(s2, y, m2Map), { map: mCompMap, m1num: x, m2num: y })) {
-                    // console.log("diagonal");
-                    x++;
-                    y++;
-                }
-                // console.log(x + "/" + y);
-                v[k] = x;
-                if(x >= s1length && y >= s2length) { // reached end
-                    // console.log("end: " + v);
-                    break;
-                }
-            }
-            if(x >= s1length && y >= s2length) {
-                console.log("end: " + v);
-                break;
-            }
-        }
+        var c = new Array(s1length + 1);
 
-        // reverse traversal
-        var path = [];
-        x = s1.nmeasures;
-        y = s2.nmeasures;
-        var prevk, prevx, prevy;
-        for(var i = trace.length - 1; i >= 0 ; i--) {
-            k = x - y;
-            if(k === -i || k !== i && trace[i][k - 1] < trace[i][k + 1])
-                prevk = k + 1;
-            else
-                prevk = k - 1;
-            prevx = trace[i][prevk];
-            console.log(prevx);
-            prevy = prevx - prevk;
-            while(x > prevx && y > prevy) {                
-                path.push({prevx: x - 1, prevy: y - 1, x: x, y: y});
-                x--;
-                y--;
-            }
-            if(i > 0)
-                path.push({prevx: prevx, prevy: prevy, x: x, y: y});
-            x = prevx;
-            y = prevy;
-        }
-
-        return path;
-    }
-
-    function getEditScript(path, withUpdate) {
-        var script = [];
-        for(var i = path.length - 1; i >= 0; i--) {
-            var step = path[i];
-            console.log(step.x + "/" + step.prevx + " " + step.y + "/" + step.prevy)
-            if(step.prevy === step.y) {
-                if(withUpdate && i >= 1 && path[i-1].prevx === path[i-1].x && step.prevx === path[i-1].prevy) { // next is insertion -> update
-                    script.push({action: diffActions.mod, m1: step.prevx, m2: path[i-1].prevy});
-                    i--;
-                }
+        for(var i = 0; i <= s1length; i++)
+            c[i] = new Array(s2length + 1);
+        for(var i = 0; i <= s1length; i++)
+            c[i][0] = 0;
+        for(var i = 0; i <= s2length; i++)
+            c[0][i] = 0;
+        
+        for(var i = 1; i <= s1length; i++) {
+            for(var j = 1; j <= s2length; j++) {
+                if(compareMeasures(getMeasure(s1, i), getMeasure(s2, j)))
+                    c[i][j] = c[i - 1][j - 1] + 1;
                 else
-                    script.push({action: diffActions.del, m1: step.prevx, m2: null});
+                    c[i][j] = Math.max(c[i][j - 1], c[i - 1][j]);
             }
-            else if(step.prevx === step.x) {
-                script.push({action: diffActions.ins, m1: null, m2: step.prevy});
-            }
-            else
-                script.push({action: diffActions.noop, m1: step.prevx, m2: step.prevy});
         }
-
-        return script;
+        
+        return c;
     }
 
-    function printEditScript(script) {
-        for(var j = 0; j < script.length; j++) {
-            var a = script[j];
-            var output = a.action;
-            a.m1 = a.m1 || "";
-            for(var s = 6 - ("" + a.m1).length; s > 0; s--)
-                output += " ";
-            if(a.m1)
-                output += a.m1;
-            output +=  "    |";
-            for(var t = 4 - ("" + a.m2).length; t > 0; t--)
-                output += " ";
-            output += (a.m2 ? a.m2: "");
-            console.log(output);
+    function getEditScript(c, s1, s2, i, j) {
+        var script = [];
+        if(i > 0 && j > 0 && compareMeasures(getMeasure(s1, i), getMeasure(s2, j))) {
+            script = getEditScript(c, s1, s2, i - 1, j - 1);
+            script.push({action: diffActions.noop, m1: i, m2: j});
         }
+        else if(j > 0 && (i === 0 || c[i][j - 1] >= c[i - 1][j])) {
+            script = getEditScript(c, s1, s2, i, j - 1);
+            script.push({action: diffActions.ins, m1: null, m2: j});
+        }
+        else if(i > 0 && (j === 0 || c[i][j - 1] < c[i - 1][j])) {
+            script = getEditScript(c, s1, s2, i - 1, j);
+            script.push({action: diffActions.del, m1: i, m2: null});
+        }
+        
+        return script;
     }
 
     function applyEditScript(script, s1, s2) {
         script.forEach(function(step) {
-            if(step.action !== diffActions.noop) {
+            if(step.action === diffActions.mod) {
+                diffMeasure(s1, s2, step.m1, step.m2)
+            }
+            else {
                 var color;
                 if(step.action === diffActions.del)
                     color = colors.red;
                 else if(step.action === diffActions.ins)
                     color = colors.green;
-                else if(step.action === diffActions.mod)
-                    color = colors.blue;
                 if(step.m1)
-                    colorMeasure(getMeasure(s1, step.m1), color);
+                    colorMeasure(s1, step.m1, color);
                 if(step.m2)
-                    colorMeasure(getMeasure(s2, step.m2), color);
+                    colorMeasure(s2, step.m2, color);
             }
         });
     }
 
-    function doTheDiff(s1, s2) {
-        var c1 = s1.newCursor();
-        var c2 = s2.newCursor();
+    // Merges consecutive inserts and deletes into a single modify action
+    // Also removes noop actions
+    function consolidateScript(script) {
+        var newScript = [];
+        for(var i = 0; i < script.length - 1; i++) {
+            if(script[i].action === diffActions.del && script[i + 1].action === diffActions.ins) {
+                newScript.push({action: diffActions.mod, m1: script[i].m1, m2: script[i + 1].m2});
+                i++;
+            }
+            else if(script[i].action !== diffActions.noop)
+                newScript.push(script[i]);
+        }
 
-        c1.track = 0;
-        c1.rewind(0);  // set cursor to first chord/rest
-        c2.track = 0;
-        c2.rewind(0);  // set cursor to first chord/rest
+        return newScript;
+    }
 
-        var measure = 0;
+    // Diffs and colors two measures
+    function diffMeasure(s1, s2, measure1, measure2) {
+        var c1 = getMeasureCursor(s1, measure1);
+        var c2 = getMeasureCursor(s2, measure2);
+        
+        var seg1 = c1.measure.firstSegment;
+        var seg2 = c2.measure.firstSegment;
 
-        while (c1.measure && c2.measure) {
-            var seg1 = c1.measure.firstSegment;
-            var seg2 = c2.measure.firstSegment;
+        while(seg1 || seg2) {
+            if(!seg2) {
+                colorElement(seg1.elementAt(0), colors.red);
+                seg1 = seg1.nextInMeasure;
+                continue;
+            }
+            else if(!seg1) {
+                colorElement(seg2.elementAt(0), colors.green);
+                seg2 = seg2.nextInMeasure;
+                continue;
+            }
 
-            if(!compareMeasures(c1.measure, c2.measure)) {
+            var el1 = seg1.elementAt(0);
+            var el2 = seg2.elementAt(0);
 
-                while(seg1 || seg2) {
-                    if(!seg2) {
-                        colorElement(seg1.elementAt(0), colors.red);
-                        seg1 = seg1.nextInMeasure;
-                        continue;
-                    }
-                    else if(!seg1) {
-                        colorElement(seg2.elementAt(0), colors.green);
-                        seg2 = seg2.nextInMeasure;
-                        continue;
-                    }
-
-                    var el1 = seg1.elementAt(0);
-                    var el2 = seg2.elementAt(0);
-
-                    if(seg1.tick < seg2.tick) {
-                        if(el1.type === Element.CHORD)
-                            colorElement(el1, colors.red);
-                        else if(el1.type === Element.REST)
-                            colorElement(el1, colors.red);
-                        seg1 = seg1.nextInMeasure;
-                        continue;
-                    }
-                    else if(seg1.tick > seg2.tick) {
-                        if(el2.type === Element.CHORD)
-                            colorElement(el2, colors.green);
-                        else if(el2.type === Element.REST)
-                            colorElement(el2, colors.green);
-                        seg2 = seg2.nextInMeasure;
-                        continue;
-                    }
-                    if(el1.type === Element.CHORD && el2.type === Element.CHORD) {
-                        var notes1 = el1.notes;
-                        var notes2 = el2.notes;
-                        for (var k = 0; k < Math.max(notes1.length, notes2.length); k++)
-                        {
-                            var note1 = notes1[k];
-                            var note2 = notes2[k];
-                            if(!note1 && note2)
-                                colorElement(note2, colors.green);
-                            else if(note1 && !note2)
-                                colorElement(note1, colors.red);
-                            else { // note1 && note2
-                                if(note1.pitch !== note2.pitch) {
-                                    colorElement(note1, colors.blue);
-                                    colorElement(note2, colors.blue);                                
-                                }
-                            }
+            if(seg1.tick < seg2.tick) {
+                colorElement(el1, colors.red);
+                seg1 = seg1.nextInMeasure;
+                continue;
+            }
+            else if(seg1.tick > seg2.tick) {
+                colorElement(el2, colors.green);
+                seg2 = seg2.nextInMeasure;
+                continue;
+            }
+            if(el1.type === Element.CHORD && el2.type === Element.CHORD) {
+                var notes1 = el1.notes;
+                var notes2 = el2.notes;
+                for (var k = 0; k < Math.max(notes1.length, notes2.length); k++)
+                {
+                    var note1 = notes1[k];
+                    var note2 = notes2[k];
+                    if(!note1 && note2)
+                        colorElement(note2, colors.green);
+                    else if(note1 && !note2)
+                        colorElement(note1, colors.red);
+                    else { // note1 && note2
+                        if(note1.pitch !== note2.pitch) {
+                            colorElement(note1, colors.blue);
+                            colorElement(note2, colors.blue);                                
                         }
                     }
-                    else if(el1.type === Element.REST && el2.type === Element.REST) {
-                        if(el1.durationType !== el2.durationType) {
-                            colorElement(el1, colors.blue);
-                            colorElement(el2, colors.blue);
-                        }
-                    }
-                    else if(el1.type === Element.REST && el2.type === Element.CHORD) {
-                        colorElement(el2, colors.green);
-                    }
-                    else if(el1.type === Element.CHORD && el2.type === Element.REST) {
-                        colorElement(el1, colors.red);
-                    }
-
-                    seg1 = seg1.nextInMeasure;
-                    seg2 = seg2.nextInMeasure;
                 }
             }
-            c1.nextMeasure();
-            c2.nextMeasure();
-            measure++;
+            else if(el1.type === Element.REST && el2.type === Element.REST) {
+                if(el1.durationType !== el2.durationType) {
+                    colorElement(el1, colors.blue);
+                    colorElement(el2, colors.blue);
+                }
+            }
+            else if(el1.type === Element.REST && el2.type === Element.CHORD) {
+                colorElement(el2, colors.green);
+            }
+            else if(el1.type === Element.CHORD && el2.type === Element.REST) {
+                colorElement(el1, colors.red);
+            }
+
+            seg1 = seg1.nextInMeasure;
+            seg2 = seg2.nextInMeasure;
         }
     }
 
-    function mergeAndPlayScores(s1, s2, editScript) {
+    function doTheDiff(score1, score2) {
+        var lcs = lcsLength(score1, score2);
+        var script = getEditScript(lcs,score1, score2, 
+            score1.nmeasures, score2.nmeasures);
 
+        script = consolidateScript(script);
+        
+        applyEditScript(script, score1, score2);
+
+        differences = script;
+    }
+
+    function applyDiffNum() {
+        var difference = differences[differenceNum - 1];
+        var m1 = difference.m1;
+        var m2 = difference.m2;
+
+        if(!m1)
+            m1 = m2;
+        if(!m2)
+            m2 = m1;
+        
+        var s1Start = Math.max(0, m1 - 2);
+        var s2Start = Math.max(0, m2 - 2);
+
+        var s1End = Math.min(score1.nmeasures, m1);
+        var s2End = Math.min(score2.nmeasures, m2);
+
+        if(s1Start < score1.nmeasures)
+            highlightMeasures(score1, s1Start, s1End);
+        if(s1Start < score1.nmeasures)
+            highlightMeasures(score2, s2Start, s2End);
+
+        leftPlayMeasure = {start: s1Start, end: s1End};
+        rightPlayMeasure = {start: s2Start, end: s2End};
+        
+        scoreview1.setScore(score1);
+        scoreview2.setScore(score2);
     }
 
     menuPath: "Plugins.ScoreDiff"
     pluginType: "dialog"
     width:  1400
     height: 1200
+
+    Button {
+        id: btnToggleDiffMode
+        width: 200
+        text: diffMode ? "Disable Diff Mode" : "Enable Diff Mode"
+        x: 100
+        y: 20
+        onClicked: {
+            if(!diffMode) {
+                btnNextDifference.enabled = true;
+                btnPlayLeft.enabled = true;
+                btnPlayRight.enabled = true;
+                onNextDifferenceClick();
+            }
+            else {
+                clearHighlighting(score1);
+                clearHighlighting(score2);
+                scoreview1.setScore(score1);
+                scoreview2.setScore(score2);
+
+                btnPrevDifference.enabled = false;
+                btnNextDifference.enabled = false;
+                btnPlayLeft.enabled = false;
+                btnPlayRight.enabled = false;
+                differenceNum = 0;
+            }
+            diffMode = !diffMode;
+        }
+    }
+
+    Button {
+        id: btnPrevDifference
+        width: 20
+        text: qsTr("<")
+        enabled: false
+        x: 620
+        y: 20
+        onClicked: {
+            if(differenceNum > 1)
+                differenceNum--;
+            if(differenceNum <= 1)
+                btnPrevDifference.enabled = false;
+            if(differenceNum > 1)
+                btnNextDifference.enabled = true;
+                
+            applyDiffNum();
+        }
+    }
+
+    Text {
+      id: lblDifference
+      text: "Difference " + differenceNum + " / " + (differences ? differences.length : 0)
+      x: 650
+      y: 25
+    }
+
+    function onNextDifferenceClick() {
+        if(differenceNum < differences.length)
+            differenceNum++;
+        if(differenceNum > 1)
+            btnPrevDifference.enabled = true;
+        if(differenceNum === differences.length)
+            btnNextDifference.enabled = false;
+
+        applyDiffNum();
+    }
+
+    Button {
+        id: btnNextDifference
+        width: 20
+        text: qsTr(">")
+        enabled: false
+        x: 760
+        y: 20
+        onClicked: onNextDifferenceClick()
+    }
+
+    Button {
+        id: btnPlayLeft
+        width: 80
+        text: qsTr("Play")
+        enabled: false
+        x: 300
+        y: 20
+        onClicked: {
+            while(curScore !== score1)
+                cmd("previous-score");
+
+            var supressStop = leftPlayMeasure.end === score1.nmeasures - 1;
+            timer.playMeasures(leftPlayMeasure.start, leftPlayMeasure.end, supressStop);
+        }
+    }
+
+    Button {
+        id: btnPlayRight
+        width: 80
+        text: qsTr("Play")
+        enabled: false
+        x: 1000
+        y: 20
+        onClicked: {
+            while(curScore !== score2)
+                cmd("previous-score");
+
+            var supressStop = rightPlayMeasure.end === score2.nmeasures - 1;
+            timer.playMeasures(rightPlayMeasure.start, rightPlayMeasure.end, supressStop);
+        }
+    }
     
     ScoreView
     {
         id: scoreview1
         width: 700
         x: 0
-        y: 0
+        y: 45
         color: "transparent"
     }
 
@@ -537,69 +622,16 @@ MuseScore
     {
         id: scoreview2
         x: 700
-        y: 0
+        y: 45
         width: 700
         color: "transparent"
-    }
-
-    Button {
-        id: btnCompare
-        width: 80
-        text: qsTr("Compare")
-        x: 20
-        y: 1020
-        onClicked: {
-            doTheDiff(score1, score2);
-            scoreview1.setScore(score1);
-            scoreview2.setScore(score2);
-        }
-    }
-
-    Button {
-        id: btnCompare2
-        width: 80
-        text: qsTr("Compare2")
-        x: 20
-        y: 980
-        onClicked: {
-            var diff = meyersDiff(score1, score2);
-            var editScript = getEditScript(diff, true);
-            printEditScript(editScript);
-            applyEditScript(editScript, score1, score2);
-            scoreview1.setScore(score1);
-            scoreview2.setScore(score2);
-        }
-    }
-
-    Button {
-        id: btnHide
-        width: 80
-        text: qsTr("Hide")
-        x: 120
-        y: 1020
-        onClicked: {
-            highlightMeasures(score1, null, null);
-            scoreview1.setScore(score1);
-        }
-    }
-
-    Button {
-        id: btnShow
-        width: 80
-        text: qsTr("Show")
-        x: 120
-        y: 980
-        onClicked: {
-            highlightMeasures(score1, -1, score1.nmeasures + 1);
-            scoreview1.setScore(score1);
-        }
     }
 
     Button {
         id: btnExit
         width: 80
         text: qsTr("Exit")
-        x: 220
+        x: 1240
         y: 1020
         onClicked: {
             score1.endCmd(true);
@@ -613,64 +645,45 @@ MuseScore
     Button {
         id: btnPrevPage
         width: 20
+        enabled: false
         text: qsTr("<")
-        x: 670
+        x: 650
         y: 1020
         onClicked: {
+            btnNextPage.enabled = true;
             scoreview1.prevPage();
             scoreview2.prevPage();
+
+            if(pageNum > 1)
+                pageNum--;
+            if(pageNum === 1)
+                btnPrevPage.enabled = false;
+
         }
+    }
+    
+    Text {
+      id: lblPage
+      text: "Page " + pageNum
+      x: 680
+      y: 1025
     }
 
     Button {
         id: btnNextPage
         width: 20
         text: qsTr(">")
-        x: 710
+        x: 730
         y: 1020
         onClicked: {
+            btnPrevPage.enabled = true;
             scoreview1.nextPage();
             scoreview2.nextPage();
-        }
-    }
 
-    Button {
-        id: btnDifference
-        width: 80
-        text: qsTr("Difference")
-        x: 1000
-        y: 940
-        onClicked: {
-            highlightMeasures(score1, 4, 6);
-            highlightMeasures(score2, 4, 6);
-            scoreview1.setScore(score1);
-            scoreview2.setScore(score2);
-        }
-    }
-
-    Button {
-        id: btnPlayLeft
-        width: 80
-        text: qsTr("Play Left")
-        x: 1000
-        y: 980
-        onClicked: {
-            while(curScore !== score1)
-                cmd("previous-score");
-            timer.playMeasures(4, 6);
-        }
-    }
-
-    Button {
-        id: btnPlayRight
-        width: 80
-        text: qsTr("Play Right")
-        x: 1000
-        y: 1020
-        onClicked: {
-            while(curScore !== score2)
-                cmd("previous-score");
-            timer.playMeasures(4, 6);
+            if(pageNum < Math.max(score1.npages, score2.npages))
+                pageNum++;
+            if(pageNum === Math.max(score1.npages, score2.npages))
+                btnNextPage.enabled = false;
         }
     }
 
@@ -684,7 +697,11 @@ MuseScore
         score2 = scores[1];
         score1.startCmd();
         score2.startCmd();
+        doTheDiff(score1, score2);
         scoreview1.setScore(score1);
         scoreview2.setScore(score2);
+
+        if(Math.max(score1.npages, score2.npages) === 1)
+            btnNextPage.enabled = false;
     }
 }
