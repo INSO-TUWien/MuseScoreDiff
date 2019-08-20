@@ -394,6 +394,9 @@ MuseScore
         var seg1 = c1.measure.firstSegment;
         var seg2 = c2.measure.firstSegment;
 
+        var seg1Offset = seg1.tick;
+        var seg2Offset = seg2.tick;
+
         while(seg1 || seg2) {
             if(!seg2) {
                 colorElement(seg1.elementAt(0), colors.red);
@@ -408,13 +411,13 @@ MuseScore
 
             var el1 = seg1.elementAt(0);
             var el2 = seg2.elementAt(0);
-
-            if(seg1.tick < seg2.tick) {
+            
+            if((seg1.tick - seg1Offset) < (seg2.tick - seg2Offset)) {
                 colorElement(el1, colors.red);
                 seg1 = seg1.nextInMeasure;
                 continue;
             }
-            else if(seg1.tick > seg2.tick) {
+            else if((seg1.tick - seg1Offset) > (seg2.tick - seg2Offset)) {
                 colorElement(el2, colors.green);
                 seg2 = seg2.nextInMeasure;
                 continue;
