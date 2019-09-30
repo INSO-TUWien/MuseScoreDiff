@@ -5,6 +5,11 @@ import QtQuick.Window 2.2;
 
 MuseScore
 {
+    menuPath: "Plugins.ScoreDiff"
+    pluginType: "dialog"
+    width:  1400
+    height: 1200
+
     property var colors :{
         "red": "#ff0000",
         "blue": "#0000ff",
@@ -175,11 +180,14 @@ MuseScore
         }
 
         function playMeasures(from, to, supressStop) {
-            if(supressStop !== true)
+            if (supressStop !== true)
                 supressStop = false;
-            if(to < from)
+            if (to < from)
                 return;
-            var prepareCommands = ["escape", "next-element", "next-measure", "prev-measure"];
+
+            var prepareCommands = ["escape", "next-element", "next-measure", "prev-measure"];            
+            for (var c = 0; c < prepareCommands.length; c++)
+                cmd(prepareCommands[c]);
 
             // Disable play buttons until playback is finished
             btnPlayLeft.enabled = false;
@@ -189,27 +197,19 @@ MuseScore
             var measures = to - from + 1;
             var notesPerMeasure = 4;
             var cur = curScore.newCursor();
-            if(cur.timeSignature)
+            if (cur.timeSignature)
                 notesPerMeasure = cur.timeSignature.numerator / cur.timeSignature.denominator * 4;
             var timePerMeasure = notesPerMeasure * 500;
-            if(cur.tempo)
-                timePerMeasure = (1 / cur.tempo) * notesPerMeasure * 1000;
+            if (cur.tempo)
+                timePerMeasure = notesPerMeasure / cur.tempo * 1000;
             var time = timePerMeasure * measures * 0.98;
 
-            for(var c = 0; c < prepareCommands.length; c++)
-                cmd(prepareCommands[c]);
-            
-            for(var i = 0; i < from; i++)
+            for (var i = 0; i < from; i++) {
                 cmd("next-measure");
-            
+            }
             cmd("play");
-
-
-            timer.setTimeout(function(){
-                if(!supressStop)
-                    cmd("play");
-                btnPlayLeft.enabled = true;
-                btnPlayRight.enabled = true;
+            timer.setTimeout(function() {
+                cmd("play");
             }, time);
         }
     }
@@ -459,7 +459,7 @@ MuseScore
         }
     }
 
-    function doTheDiff(score1, score2) {
+    function diff(score1, score2) {
         var lcs = lcsLength(score1, score2);
         var script = getEditScript(lcs,score1, score2, 
             score1.nmeasures, score2.nmeasures);
@@ -499,10 +499,16 @@ MuseScore
         scoreview2.setScore(score2);
     }
 
-    menuPath: "Plugins.ScoreDiff"
-    pluginType: "dialog"
-    width:  1400
-    height: 1200
+    function onNextDifferenceClick() {
+        if(differenceNum < differences.length)
+            differenceNum++;
+        if(differenceNum > 1)
+            btnPrevDifference.enabled = true;
+        if(differenceNum === differences.length)
+            btnNextDifference.enabled = false;
+
+        applyDiffNum();
+    }
 
     Button {
         id: btnToggleDiffMode
@@ -543,9 +549,9 @@ MuseScore
         onClicked: {
             if(differenceNum > 1)
                 differenceNum--;
-            if(differenceNum <= 1)
+            if(differenceNum == 1)
                 btnPrevDifference.enabled = false;
-            if(differenceNum > 1)
+            if(differenceNum < differences.length)
                 btnNextDifference.enabled = true;
                 
             applyDiffNum();
@@ -557,17 +563,6 @@ MuseScore
       text: "Difference " + differenceNum + " / " + (differences ? differences.length : 0)
       x: 650
       y: 25
-    }
-
-    function onNextDifferenceClick() {
-        if(differenceNum < differences.length)
-            differenceNum++;
-        if(differenceNum > 1)
-            btnPrevDifference.enabled = true;
-        if(differenceNum === differences.length)
-            btnNextDifference.enabled = false;
-
-        applyDiffNum();
     }
 
     Button {
@@ -588,8 +583,9 @@ MuseScore
         x: 300
         y: 20
         onClicked: {
-            while(curScore !== score1)
+            while (curScore !== score1) {
                 cmd("previous-score");
+            }
 
             var supressStop = leftPlayMeasure.end === score1.nmeasures - 1;
             timer.playMeasures(leftPlayMeasure.start, leftPlayMeasure.end, supressStop);
@@ -604,16 +600,16 @@ MuseScore
         x: 1000
         y: 20
         onClicked: {
-            while(curScore !== score2)
+            while (curScore !== score2) {
                 cmd("previous-score");
+            }
 
             var supressStop = rightPlayMeasure.end === score2.nmeasures - 1;
             timer.playMeasures(rightPlayMeasure.start, rightPlayMeasure.end, supressStop);
         }
     }
     
-    ScoreView
-    {
+    ScoreView {
         id: scoreview1
         width: 700
         x: 0
@@ -621,8 +617,7 @@ MuseScore
         color: "transparent"
     }
 
-    ScoreView
-    {
+    ScoreView {
         id: scoreview2
         x: 700
         y: 45
@@ -700,7 +695,7 @@ MuseScore
         score2 = scores[1];
         score1.startCmd();
         score2.startCmd();
-        doTheDiff(score1, score2);
+        diff(score1, score2);
         scoreview1.setScore(score1);
         scoreview2.setScore(score2);
 
